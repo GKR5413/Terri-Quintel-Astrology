@@ -1,7 +1,8 @@
-import { Component } from '@angular/core';
+import { Component, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
+import { Subject, takeUntil } from 'rxjs';
 // Optional: You can use the ChartService from services/chart.service.ts instead of HttpClient directly
 // import { ChartService, Chart, CalculateChartRequest } from '../services/chart.service';
 
@@ -72,9 +73,14 @@ interface ApiResponse {
     <div class="task2-container">
       <h2>Birth Chart Calculator</h2>
 
-      <div *ngIf="error && !loading" class="error-container">
+      <div *ngIf="error && !loading" class="error-container" role="alert" aria-live="assertive">
         <p class="error-message">{{ error }}</p>
-        <button (click)="error = null" class="close-button">×</button>
+        <button (click)="error = null" class="close-button" aria-label="Close error message">×</button>
+      </div>
+
+      <div *ngIf="successMessage" class="success-container" role="status" aria-live="polite">
+        <p class="success-message">{{ successMessage }}</p>
+        <button (click)="successMessage = null" class="close-button" aria-label="Close success message">×</button>
       </div>
 
       <div *ngIf="!calculatedChart" class="form-section">
@@ -86,8 +92,11 @@ interface ApiResponse {
               id="birthDate"
               formControlName="birthDate"
               [class.invalid]="isFieldInvalid('birthDate')"
+              aria-label="Birth date"
+              aria-required="true"
+              [attr.aria-invalid]="isFieldInvalid('birthDate')"
             />
-            <div *ngIf="isFieldInvalid('birthDate')" class="validation-message">
+            <div *ngIf="isFieldInvalid('birthDate')" class="validation-message" role="alert">
               Birth date is required
             </div>
           </div>
@@ -99,8 +108,11 @@ interface ApiResponse {
               id="birthTime"
               formControlName="birthTime"
               [class.invalid]="isFieldInvalid('birthTime')"
+              aria-label="Birth time"
+              aria-required="true"
+              [attr.aria-invalid]="isFieldInvalid('birthTime')"
             />
-            <div *ngIf="isFieldInvalid('birthTime')" class="validation-message">
+            <div *ngIf="isFieldInvalid('birthTime')" class="validation-message" role="alert">
               Birth time is required
             </div>
           </div>
@@ -113,6 +125,9 @@ interface ApiResponse {
               formControlName="birthLocation"
               placeholder="e.g., New York, NY"
               [class.invalid]="isFieldInvalid('birthLocation')"
+              aria-label="Birth location"
+              aria-required="true"
+              [attr.aria-invalid]="isFieldInvalid('birthLocation')"
             />
             <div *ngIf="isFieldInvalid('birthLocation')" class="validation-message">
               <span *ngIf="chartForm.get('birthLocation')?.hasError('required')">
@@ -233,12 +248,43 @@ interface ApiResponse {
       display: flex;
       justify-content: space-between;
       align-items: center;
+      animation: slideIn 0.3s ease-out;
     }
 
     .error-message {
       color: #c33;
       margin: 0;
       font-weight: 500;
+    }
+
+    .success-container {
+      background: #d4edda;
+      border: 1px solid #c3e6cb;
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+      margin-bottom: 2rem;
+      position: relative;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      animation: slideIn 0.3s ease-out;
+    }
+
+    .success-message {
+      color: #155724;
+      margin: 0;
+      font-weight: 500;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     .close-button {
@@ -533,12 +579,14 @@ interface ApiResponse {
     }
   `]
 })
-export class Task2Component {
+export class Task2Component implements OnDestroy {
   chartForm!: FormGroup;
   loading: boolean = false;
   error: string | null = null;
+  successMessage: string | null = null;
   calculatedChart: ChartResult | null = null;
   submitted: boolean = false;
+  private destroy$ = new Subject<void>();
 
   constructor(
     private fb: FormBuilder,
@@ -551,8 +599,14 @@ export class Task2Component {
     });
   }
 
+  ngOnDestroy() {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
+
   onSubmit() {
     this.submitted = true;
+    this.successMessage = null;
 
     if (this.chartForm.invalid) {
       return;
@@ -568,21 +622,36 @@ export class Task2Component {
       birthLocation: formValues.birthLocation
     };
 
-    this.http.post<ApiResponse>('/api/charts/calculate', requestBody).subscribe({
-      next: (response: ApiResponse) => {
-        if (response.success) {
-          this.calculatedChart = response.data;
-          this.chartForm.reset();
-          this.submitted = false;
+    this.http.post<ApiResponse>('/api/charts/calculate', requestBody)
+      .pipe(takeUntil(this.destroy$))
+      .subscribe({
+        next: (response: ApiResponse) => {
+          if (response.success) {
+            this.calculatedChart = response.data;
+            this.successMessage = '✓ Chart calculated successfully!';
+            this.chartForm.reset();
+            this.submitted = false;
+            setTimeout(() => {
+              this.successMessage = null;
+            }, 5000);
+          }
+          this.loading = false;
+        },
+        error: (err: any) => {
+          if (err.status === 0) {
+            this.error = 'Unable to connect to server. Please check if the backend is running.';
+          } else if (err.status === 400) {
+            this.error = 'Invalid input data. Please check your form fields and try again.';
+          } else if (err.status === 404) {
+            this.error = 'Calculate endpoint not found. Please check the API configuration.';
+          } else if (err.status >= 500) {
+            this.error = 'Server error occurred. Please try again later.';
+          } else {
+            this.error = 'Failed to calculate chart. Please try again.';
+          }
+          this.loading = false;
         }
-        this.loading = false;
-      },
-      error: (err: any) => {
-        this.error = 'Failed to calculate chart. Please try again.';
-        this.loading = false;
-        console.error('Error calculating chart:', err);
-      }
-    });
+      });
   }
 
   isFieldInvalid(fieldName: string): boolean {
@@ -595,6 +664,7 @@ export class Task2Component {
     this.chartForm.reset();
     this.submitted = false;
     this.error = null;
+    this.successMessage = null;
   }
 
   getPlanetEntries(planets: ChartResult['planets']): Array<{name: string, data: Planet}> {

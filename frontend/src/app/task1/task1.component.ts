@@ -1,6 +1,7 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
+import { Subject, takeUntil } from 'rxjs';
 // Optional: You can use the ChartService from services/chart.service.ts instead of HttpClient directly
 // import { ChartService, Chart } from '../services/chart.service';
 
@@ -74,18 +75,20 @@ interface ApiResponse {
     <div class="task1-container">
       <h2>Astrological Charts</h2>
 
-      <div *ngIf="loading" class="loading-container">
-        <div class="spinner"></div>
+      <div *ngIf="loading" class="loading-container" role="status" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
         <p>Loading charts...</p>
       </div>
 
-      <div *ngIf="error && !loading" class="error-container">
+      <div *ngIf="error && !loading" class="error-container" role="alert" aria-live="assertive">
         <p class="error-message">{{ error }}</p>
-        <button (click)="loadCharts()" class="retry-button">Retry</button>
+        <button (click)="loadCharts()" class="retry-button" aria-label="Retry loading charts">Retry</button>
       </div>
 
-      <div *ngIf="!loading && !error && charts.length === 0" class="empty-container">
-        <p>No charts available</p>
+      <div *ngIf="!loading && !error && charts.length === 0" class="empty-container" role="status">
+        <div class="empty-illustration">📊</div>
+        <p>No charts available yet</p>
+        <p class="empty-subtitle">Charts will appear here once they are created</p>
       </div>
 
       <div *ngIf="!loading && !error && charts.length > 0" class="charts-grid">
@@ -219,6 +222,18 @@ interface ApiResponse {
       font-size: 1.1rem;
     }
 
+    .empty-illustration {
+      font-size: 4rem;
+      margin-bottom: 1rem;
+      opacity: 0.5;
+    }
+
+    .empty-subtitle {
+      font-size: 0.9rem;
+      color: #bbb;
+      margin-top: 0.5rem;
+    }
+
     .charts-grid {
       display: grid;
       grid-template-columns: 1fr;
@@ -349,12 +364,13 @@ interface ApiResponse {
     }
   `]
 })
-export class Task1Component implements OnInit {
+export class Task1Component implements OnInit, OnDestroy {
   charts: Chart[] = [];
   loading: boolean = false;
   error: string | null = null;
   page: number = 1;
   totalPages: number = 0;
+  private destroy$ = new Subject<void>();
 
   constructor(private http: HttpClient) {}
 
@@ -362,25 +378,39 @@ export class Task1Component implements OnInit {
     this.loadCharts();
   }
 
+  ngOnDestroy() {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
+
   loadCharts() {
     this.loading = true;
     this.error = null;
 
-    this.http.get<ApiResponse>('/api/charts').subscribe({
-      next: (response: ApiResponse) => {
-        if (response.success) {
-          this.charts = response.data;
-          this.totalPages = response.pages;
-          this.page = response.page;
+    this.http.get<ApiResponse>('/api/charts')
+      .pipe(takeUntil(this.destroy$))
+      .subscribe({
+        next: (response: ApiResponse) => {
+          if (response.success) {
+            this.charts = response.data;
+            this.totalPages = response.pages;
+            this.page = response.page;
+          }
+          this.loading = false;
+        },
+        error: (err: any) => {
+          if (err.status === 0) {
+            this.error = 'Unable to connect to server. Please check if the backend is running.';
+          } else if (err.status === 404) {
+            this.error = 'Charts endpoint not found. Please check the API configuration.';
+          } else if (err.status >= 500) {
+            this.error = 'Server error occurred. Please try again later.';
+          } else {
+            this.error = 'Failed to load charts. Please try again.';
+          }
+          this.loading = false;
         }
-        this.loading = false;
-      },
-      error: (err: any) => {
-        this.error = 'Failed to load charts. Please try again.';
-        this.loading = false;
-        console.error('Error loading charts:', err);
-      }
-    });
+      });
   }
 
   getPlanetEntries(planets: Chart['planets']): Array<{name: string, data: Planet}> {
